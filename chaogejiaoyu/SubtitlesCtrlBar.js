@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         超格教育字幕调整按钮
 // @namespace    http://tampermonkey.net/
-// @version      2026-11-26.1
-// @description  超格教育网页播放器字幕大小调整 + 底部居中半透明底色 + 倍速控制（挂在 div.ppt 下，兼容原字幕开关）
+// @version      2026-11-26.2
+// @description  超格教育网页播放器字幕大小调整 + 底部居中半透明底色 + 倍速控制（挂在 div.ppt 下，兼容原字幕开关与原倍速按钮）
 // @author       You
 // @match        https://chaogejiaoyu.com/course/room/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=chaogejiaoyu.com
@@ -20,6 +20,7 @@
     // 倍速档位（循环）
     const SPEED_LIST = [1, 1.25, 1.5, 1.75, 2, 0.75];
     let currentSpeedIndex = 0;
+    let desiredSpeed = 1;
 
     // ==================== 操作栏 ====================
     const bar = document.createElement('div');
@@ -154,23 +155,48 @@
     }
 
     // ==================== 倍速控制 ====================
+    function syncOriginalSpeedUI(speed) {
+        try {
+            // 同步原播放器倍速按钮文字
+            const speedBtns = querySelectorAllDeep('.speed-btn');
+            speedBtns.forEach(btn => {
+                btn.textContent = speed + 'x';
+            });
+
+            // 同步原倍速列表的 active 状态
+            const items = querySelectorAllDeep('.speed-box li');
+            items.forEach(li => {
+                const s = parseFloat(li.dataset.speed || li.getAttribute('data-speed'));
+                if (Math.abs(s - speed) < 0.01) {
+                    li.classList.add('active');
+                } else {
+                    li.classList.remove('active');
+                }
+            });
+        } catch (e) {}
+    }
+
     function setPlaybackRate(speed) {
-        // 优先使用原播放器 API
+        desiredSpeed = speed;
+        let ok = false;
+
+        // 1. 优先使用原播放器 API
         if (window.$ && $.DW && typeof $.DW.playbackRate === 'function') {
-            $.DW.playbackRate(speed);
-            return true;
+            try {
+                $.DW.playbackRate(speed);
+                ok = true;
+            } catch (e) {}
         }
 
-        // 兜底：直接改 video 元素
+        // 2. 直接改所有 video 元素（兜底 + 防止被重置）
         const videos = querySelectorAllDeep('video');
-        let ok = false;
-        for (const v of videos) {
+        videos.forEach(v => {
             try {
                 v.playbackRate = speed;
                 ok = true;
             } catch (e) {}
-        }
-        // 再试常见 id
+        });
+
         const byId = document.getElementById('playbackVideo');
         if (byId) {
             try {
@@ -178,18 +204,18 @@
                 ok = true;
             } catch (e) {}
         }
+
+        // 3. 同步原播放器 UI
+        syncOriginalSpeedUI(speed);
+
         return ok;
     }
 
     function cycleSpeed() {
         currentSpeedIndex = (currentSpeedIndex + 1) % SPEED_LIST.length;
         const speed = SPEED_LIST[currentSpeedIndex];
-        const ok = setPlaybackRate(speed);
+        setPlaybackRate(speed);
         btnSpeed.textContent = speed + 'x';
-        if (!ok) {
-            console.warn('倍速设置失败，未找到可用的播放器接口');
-        }
-        // 记住当前倍速
         localStorage.setItem('subtitlePlaybackRate', String(speed));
     }
 
@@ -198,23 +224,65 @@
         cycleSpeed();
     });
 
+    // 监听 video 的 play 事件，防止暂停后再播放被重置为 1 倍速
+    function hookVideoRateKeep() {
+        const videos = querySelectorAllDeep('video');
+        videos.forEach(v => {
+            if (v._rateKeepHooked) return;
+            v._rateKeepHooked = true;
+
+            v.addEventListener('play', function () {
+                if (desiredSpeed && Math.abs(v.playbackRate - desiredSpeed) > 0.01) {
+                    v.playbackRate = desiredSpeed;
+                    if (window.$ && $.DW && typeof $.DW.playbackRate === 'function') {
+                        try { $.DW.playbackRate(desiredSpeed); } catch (e) {}
+                    }
+                }
+            });
+
+            // 有些播放器会在 ratechange 后再次改回去，稍作延迟再强制一次
+            v.addEventListener('ratechange', function () {
+                if (desiredSpeed && Math.abs(v.playbackRate - desiredSpeed) > 0.01) {
+                    setTimeout(() => {
+                        if (Math.abs(v.playbackRate - desiredSpeed) > 0.01) {
+                            v.playbackRate = desiredSpeed;
+                        }
+                    }, 50);
+                }
+            });
+        });
+    }
+
     // 初始化恢复上次倍速
     (function restoreSpeed() {
         const saved = parseFloat(localStorage.getItem('subtitlePlaybackRate'));
         if (saved && !isNaN(saved)) {
             const idx = SPEED_LIST.indexOf(saved);
-            if (idx >= 0) currentSpeedIndex = idx;
-            else {
-                // 不在列表里就插入到当前
+            if (idx >= 0) {
+                currentSpeedIndex = idx;
+            } else {
                 SPEED_LIST.unshift(saved);
                 currentSpeedIndex = 0;
             }
+            desiredSpeed = saved;
+            btnSpeed.textContent = saved + 'x';
+
+            // 延迟应用，等播放器初始化完成
             setTimeout(() => {
                 setPlaybackRate(saved);
-                btnSpeed.textContent = saved + 'x';
-            }, 1500);
+                hookVideoRateKeep();
+            }, 1200);
+            setTimeout(() => {
+                setPlaybackRate(saved);
+                hookVideoRateKeep();
+            }, 3000);
+        } else {
+            setTimeout(hookVideoRateKeep, 1500);
         }
     })();
+
+    // 定期检查并挂载监听（防止 video 被动态替换）
+    setInterval(hookVideoRateKeep, 5000);
 
     // ==================== 包装字幕 + 样式 ====================
     let currentSubtitleEl = null;

@@ -1,11 +1,11 @@
 // ==UserScript==
-// @name        键盘翻页onejav
+// @name        键盘翻页onejav.com
 // @namespace   Violentmonkey Scripts
 // @match       https://onejav.com/*
 // @grant       none
-// @version     1.2
+// @version     1.3
 // @author      -
-// @description 2024/6/4 10:24:10
+// @description 键盘翻页，屏蔽新开窗口的弹出广告
 // ==/UserScript==
 // 移除弹出式广告
 const origOpen = window.open

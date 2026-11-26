@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         超格教育字幕调整按钮
 // @namespace    http://tampermonkey.net/
-// @version      2026-11-26.2
-// @description  超格教育网页播放器字幕大小调整 + 底部居中半透明底色 + 倍速控制（挂在 div.ppt 下，兼容原字幕开关与原倍速按钮）
+// @version      2026-11-26.3
+// @description  超格教育网页播放器字幕大小调整 + 底部居中半透明底色 + 倍速下拉控制（挂在 div.ppt 下，兼容原字幕开关）
 // @author       You
 // @match        https://chaogejiaoyu.com/course/room/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=chaogejiaoyu.com
@@ -17,9 +17,8 @@
     const SELECTOR = 'div.subtitles';
     const PPT_SELECTOR = 'div.ppt';
 
-    // 倍速档位（循环）
-    const SPEED_LIST = [1, 1.25, 1.5, 1.75, 2, 0.75];
-    let currentSpeedIndex = 0;
+    // 倍速选项
+    const SPEED_OPTIONS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
     let desiredSpeed = 1;
 
     // ==================== 操作栏 ====================
@@ -31,6 +30,7 @@
         right: '20px',
         zIndex: '2147483647',
         display: 'flex',
+        alignItems: 'center',
         gap: '8px',
         background: 'rgba(0, 0, 0, 0.85)',
         padding: '8px 12px',
@@ -40,14 +40,14 @@
         cursor: 'move'
     });
 
-    function createBtn(text, title, isWide) {
+    function createBtn(text, title) {
         const btn = document.createElement('button');
         btn.textContent = text;
         btn.title = title;
         Object.assign(btn.style, {
-            minWidth: isWide ? '52px' : '38px',
+            width: '38px',
             height: '38px',
-            fontSize: isWide ? '14px' : '22px',
+            fontSize: '22px',
             fontWeight: 'bold',
             border: 'none',
             borderRadius: '6px',
@@ -55,7 +55,7 @@
             background: '#fff',
             color: '#222',
             lineHeight: '1',
-            padding: isWide ? '0 8px' : '0'
+            padding: '0'
         });
         btn.onmouseenter = function () { btn.style.background = '#eee'; };
         btn.onmouseleave = function () { btn.style.background = '#fff'; };
@@ -65,11 +65,36 @@
 
     const btnPlus = createBtn('+', '放大 +4px');
     const btnMinus = createBtn('-', '缩小 -4px');
-    const btnSpeed = createBtn('1.0x', '切换倍速', true);
+
+    // 倍速下拉
+    const speedSelect = document.createElement('select');
+    speedSelect.title = '选择倍速';
+    Object.assign(speedSelect.style, {
+        height: '38px',
+        minWidth: '72px',
+        fontSize: '14px',
+        fontWeight: 'bold',
+        border: 'none',
+        borderRadius: '6px',
+        cursor: 'pointer',
+        background: '#fff',
+        color: '#222',
+        padding: '0 6px',
+        outline: 'none'
+    });
+    SPEED_OPTIONS.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s;
+        opt.textContent = s + 'x';
+        if (s === 1) opt.selected = true;
+        speedSelect.appendChild(opt);
+    });
+    speedSelect.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    speedSelect.addEventListener('click', function (e) { e.stopPropagation(); });
 
     bar.appendChild(btnMinus);
     bar.appendChild(btnPlus);
-    bar.appendChild(btnSpeed);
+    bar.appendChild(speedSelect);
     document.body.appendChild(bar);
 
     // ==================== 拖拽 ====================
@@ -78,6 +103,9 @@
 
     bar.addEventListener('mousedown', function (e) {
         if (e.button !== 0) return;
+        // 点到 select 时不拖拽
+        if (e.target.tagName === 'SELECT' || e.target.tagName === 'OPTION') return;
+
         isDragging = true;
         startX = e.clientX;
         startY = e.clientY;
@@ -155,32 +183,11 @@
     }
 
     // ==================== 倍速控制 ====================
-    function syncOriginalSpeedUI(speed) {
-        try {
-            // 同步原播放器倍速按钮文字
-            const speedBtns = querySelectorAllDeep('.speed-btn');
-            speedBtns.forEach(btn => {
-                btn.textContent = speed + 'x';
-            });
-
-            // 同步原倍速列表的 active 状态
-            const items = querySelectorAllDeep('.speed-box li');
-            items.forEach(li => {
-                const s = parseFloat(li.dataset.speed || li.getAttribute('data-speed'));
-                if (Math.abs(s - speed) < 0.01) {
-                    li.classList.add('active');
-                } else {
-                    li.classList.remove('active');
-                }
-            });
-        } catch (e) {}
-    }
-
     function setPlaybackRate(speed) {
         desiredSpeed = speed;
         let ok = false;
 
-        // 1. 优先使用原播放器 API
+        // 优先原播放器 API
         if (window.$ && $.DW && typeof $.DW.playbackRate === 'function') {
             try {
                 $.DW.playbackRate(speed);
@@ -188,7 +195,7 @@
             } catch (e) {}
         }
 
-        // 2. 直接改所有 video 元素（兜底 + 防止被重置）
+        // 直接改 video（兜底）
         const videos = querySelectorAllDeep('video');
         videos.forEach(v => {
             try {
@@ -205,26 +212,30 @@
             } catch (e) {}
         }
 
-        // 3. 同步原播放器 UI
-        syncOriginalSpeedUI(speed);
-
         return ok;
     }
 
-    function cycleSpeed() {
-        currentSpeedIndex = (currentSpeedIndex + 1) % SPEED_LIST.length;
-        const speed = SPEED_LIST[currentSpeedIndex];
+    speedSelect.addEventListener('change', function () {
+        const speed = parseFloat(speedSelect.value);
         setPlaybackRate(speed);
-        btnSpeed.textContent = speed + 'x';
         localStorage.setItem('subtitlePlaybackRate', String(speed));
-    }
-
-    btnSpeed.addEventListener('click', function (e) {
-        e.stopPropagation();
-        cycleSpeed();
     });
 
-    // 监听 video 的 play 事件，防止暂停后再播放被重置为 1 倍速
+    // 隐藏 / 禁用原播放器倍速按钮
+    function disableOriginalSpeedUI() {
+        const btns = querySelectorAllDeep('.speed-btn');
+        btns.forEach(btn => {
+            btn.style.display = 'none';
+            btn.style.pointerEvents = 'none';
+            btn.disabled = true;
+        });
+        const boxes = querySelectorAllDeep('.speed-box');
+        boxes.forEach(box => {
+            box.style.display = 'none';
+        });
+    }
+
+    // 监听 video 的 play，防止被重置为 1 倍速
     function hookVideoRateKeep() {
         const videos = querySelectorAllDeep('video');
         videos.forEach(v => {
@@ -240,7 +251,6 @@
                 }
             });
 
-            // 有些播放器会在 ratechange 后再次改回去，稍作延迟再强制一次
             v.addEventListener('ratechange', function () {
                 if (desiredSpeed && Math.abs(v.playbackRate - desiredSpeed) > 0.01) {
                     setTimeout(() => {
@@ -253,36 +263,39 @@
         });
     }
 
-    // 初始化恢复上次倍速
-    (function restoreSpeed() {
+    // 初始化恢复上次倍速 + 禁用原按钮
+    (function initSpeed() {
         const saved = parseFloat(localStorage.getItem('subtitlePlaybackRate'));
         if (saved && !isNaN(saved)) {
-            const idx = SPEED_LIST.indexOf(saved);
-            if (idx >= 0) {
-                currentSpeedIndex = idx;
-            } else {
-                SPEED_LIST.unshift(saved);
-                currentSpeedIndex = 0;
-            }
             desiredSpeed = saved;
-            btnSpeed.textContent = saved + 'x';
-
-            // 延迟应用，等播放器初始化完成
-            setTimeout(() => {
-                setPlaybackRate(saved);
-                hookVideoRateKeep();
-            }, 1200);
-            setTimeout(() => {
-                setPlaybackRate(saved);
-                hookVideoRateKeep();
-            }, 3000);
-        } else {
-            setTimeout(hookVideoRateKeep, 1500);
+            // 如果不在选项里，临时加进去
+            if (!SPEED_OPTIONS.includes(saved)) {
+                const opt = document.createElement('option');
+                opt.value = saved;
+                opt.textContent = saved + 'x';
+                speedSelect.appendChild(opt);
+            }
+            speedSelect.value = String(saved);
         }
+
+        setTimeout(() => {
+            setPlaybackRate(desiredSpeed);
+            hookVideoRateKeep();
+            disableOriginalSpeedUI();
+        }, 1200);
+
+        setTimeout(() => {
+            setPlaybackRate(desiredSpeed);
+            hookVideoRateKeep();
+            disableOriginalSpeedUI();
+        }, 3000);
     })();
 
-    // 定期检查并挂载监听（防止 video 被动态替换）
-    setInterval(hookVideoRateKeep, 5000);
+    // 定期维护
+    setInterval(() => {
+        hookVideoRateKeep();
+        disableOriginalSpeedUI();
+    }, 5000);
 
     // ==================== 包装字幕 + 样式 ====================
     let currentSubtitleEl = null;

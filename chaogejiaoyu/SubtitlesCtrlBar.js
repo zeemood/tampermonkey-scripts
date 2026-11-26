@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         超格教育字幕调整按钮
 // @namespace    http://tampermonkey.net/
-// @version      2026-11-25
+// @version      2026-11-26
 // @description  超格教育网页播放器字幕大小调整 + 底部居中半透明底色（挂在 div.ppt 下，空内容时不显示黑框）
 // @author       You
 // @match        https://chaogejiaoyu.com/course/room/*

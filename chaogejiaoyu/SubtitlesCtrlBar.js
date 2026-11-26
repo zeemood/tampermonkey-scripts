@@ -238,8 +238,7 @@
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
-            pointerEvents: 'none',
-            zIndex: '20'
+            pointerEvents: 'none'
         });
 
         if (wrapper.parentElement !== ppt) {

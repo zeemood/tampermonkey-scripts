@@ -2,8 +2,9 @@
 // @name        键盘翻页onejav.com
 // @namespace   Violentmonkey Scripts
 // @match       https://onejav.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=onejav.com
 // @grant       none
-// @version     1.3
+// @version     1.4
 // @author      -
 // @description 键盘翻页，屏蔽新开窗口的弹出广告
 // ==/UserScript==

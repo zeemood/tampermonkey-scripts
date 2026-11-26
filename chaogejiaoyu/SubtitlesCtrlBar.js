@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         超格教育字幕调整按钮
 // @namespace    http://tampermonkey.net/
-// @version      2026-11-26
-// @description  超格教育网页播放器字幕大小调整 + 底部居中半透明底色（挂在 div.ppt 下，空内容时不显示黑框）
+// @version      2026-11-25.1
+// @description  超格教育网页播放器字幕大小调整 + 底部居中半透明底色 + 倍速控制（挂在 div.ppt 下，兼容原字幕开关）
 // @author       You
 // @match        https://chaogejiaoyu.com/course/room/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=chaogejiaoyu.com
@@ -16,6 +16,10 @@
 
     const SELECTOR = 'div.subtitles';
     const PPT_SELECTOR = 'div.ppt';
+
+    // 倍速档位（循环）
+    const SPEED_LIST = [1, 1.25, 1.5, 1.75, 2, 0.75];
+    let currentSpeedIndex = 0;
 
     // ==================== 操作栏 ====================
     const bar = document.createElement('div');
@@ -35,14 +39,14 @@
         cursor: 'move'
     });
 
-    function createBtn(text, title) {
+    function createBtn(text, title, isWide) {
         const btn = document.createElement('button');
         btn.textContent = text;
         btn.title = title;
         Object.assign(btn.style, {
-            width: '38px',
+            minWidth: isWide ? '52px' : '38px',
             height: '38px',
-            fontSize: '22px',
+            fontSize: isWide ? '14px' : '22px',
             fontWeight: 'bold',
             border: 'none',
             borderRadius: '6px',
@@ -50,7 +54,7 @@
             background: '#fff',
             color: '#222',
             lineHeight: '1',
-            padding: '0'
+            padding: isWide ? '0 8px' : '0'
         });
         btn.onmouseenter = function () { btn.style.background = '#eee'; };
         btn.onmouseleave = function () { btn.style.background = '#fff'; };
@@ -60,9 +64,11 @@
 
     const btnPlus = createBtn('+', '放大 +4px');
     const btnMinus = createBtn('-', '缩小 -4px');
+    const btnSpeed = createBtn('1.0x', '切换倍速', true);
 
-    bar.appendChild(btnPlus);
     bar.appendChild(btnMinus);
+    bar.appendChild(btnPlus);
+    bar.appendChild(btnSpeed);
     document.body.appendChild(bar);
 
     // ==================== 拖拽 ====================
@@ -147,52 +153,105 @@
         return normal.length > 0 ? normal[0] : null;
     }
 
+    // ==================== 倍速控制 ====================
+    function setPlaybackRate(speed) {
+        // 优先使用原播放器 API
+        if (window.$ && $.DW && typeof $.DW.playbackRate === 'function') {
+            $.DW.playbackRate(speed);
+            return true;
+        }
+
+        // 兜底：直接改 video 元素
+        const videos = querySelectorAllDeep('video');
+        let ok = false;
+        for (const v of videos) {
+            try {
+                v.playbackRate = speed;
+                ok = true;
+            } catch (e) {}
+        }
+        // 再试常见 id
+        const byId = document.getElementById('playbackVideo');
+        if (byId) {
+            try {
+                byId.playbackRate = speed;
+                ok = true;
+            } catch (e) {}
+        }
+        return ok;
+    }
+
+    function cycleSpeed() {
+        currentSpeedIndex = (currentSpeedIndex + 1) % SPEED_LIST.length;
+        const speed = SPEED_LIST[currentSpeedIndex];
+        const ok = setPlaybackRate(speed);
+        btnSpeed.textContent = speed + 'x';
+        if (!ok) {
+            console.warn('倍速设置失败，未找到可用的播放器接口');
+        }
+        // 记住当前倍速
+        localStorage.setItem('subtitlePlaybackRate', String(speed));
+    }
+
+    btnSpeed.addEventListener('click', function (e) {
+        e.stopPropagation();
+        cycleSpeed();
+    });
+
+    // 初始化恢复上次倍速
+    (function restoreSpeed() {
+        const saved = parseFloat(localStorage.getItem('subtitlePlaybackRate'));
+        if (saved && !isNaN(saved)) {
+            const idx = SPEED_LIST.indexOf(saved);
+            if (idx >= 0) currentSpeedIndex = idx;
+            else {
+                // 不在列表里就插入到当前
+                SPEED_LIST.unshift(saved);
+                currentSpeedIndex = 0;
+            }
+            setTimeout(() => {
+                setPlaybackRate(saved);
+                btnSpeed.textContent = saved + 'x';
+            }, 1500);
+        }
+    })();
+
     // ==================== 包装字幕 + 样式 ====================
     let currentSubtitleEl = null;
     let contentObserver = null;
 
     function hasContent(el) {
         if (!el) return false;
-        // 检查是否有可见文本内容
-        const text = (el.textContent || '').trim();
-        if (text.length > 0) return true;
-        // 有时候字幕是通过子元素或伪元素，再兜底检查是否可见
-        const style = getComputedStyle(el);
-        return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetHeight > 0 && el.offsetWidth > 0;
+        return (el.textContent || '').trim().length > 0;
     }
 
     function applySubtitleStyle(el) {
         if (!el) return;
 
+        // 绝不碰 display，交给原网页控制 show/hide
         const hasText = hasContent(el);
 
         if (hasText) {
-            // 有内容：加半透明黑底 + 圆角
             Object.assign(el.style, {
                 background: 'rgba(0, 0, 0, 0.65)',
                 borderRadius: '20px',
                 padding: '8px 20px',
                 textAlign: 'center',
-                display: 'inline-block',
                 maxWidth: '90%',
                 boxSizing: 'border-box',
-                pointerEvents: 'auto',
-                visibility: 'visible'
+                pointerEvents: 'auto'
             });
         } else {
-            // 无内容：去掉背景和 padding，避免小黑框
             Object.assign(el.style, {
                 background: 'transparent',
                 borderRadius: '0',
                 padding: '0',
-                display: 'inline-block',
                 maxWidth: '90%',
                 boxSizing: 'border-box',
                 pointerEvents: 'none'
             });
         }
 
-        // 恢复上次字号（无论有没有内容都应用）
         const saved = localStorage.getItem('subtitleFontSize');
         if (saved) {
             el.style.setProperty('font-size', saved, 'important');
@@ -207,7 +266,6 @@
         const ppt = findPptContainer();
         if (!ppt) return false;
 
-        // 已经正确挂载
         if (el.parentElement &&
             el.parentElement.classList.contains('subtitle-wrapper') &&
             el.parentElement.parentElement === ppt) {
@@ -216,13 +274,11 @@
             return true;
         }
 
-        // 清理旧 wrapper
         const oldWrappers = ppt.querySelectorAll('.subtitle-wrapper');
         oldWrappers.forEach(w => {
             if (w !== el.parentElement) w.remove();
         });
 
-        // 创建 / 复用 wrapper
         let wrapper = el.parentElement;
         if (!wrapper || !wrapper.classList.contains('subtitle-wrapper')) {
             wrapper = document.createElement('div');
@@ -238,7 +294,8 @@
             display: 'flex',
             justifyContent: 'center',
             alignItems: 'center',
-            pointerEvents: 'none'
+            pointerEvents: 'none',
+            zIndex: '1'
         });
 
         if (wrapper.parentElement !== ppt) {
@@ -254,11 +311,9 @@
         return true;
     }
 
-    // 监听字幕内容变化（有字 / 没字时切换样式）
     function setupContentObserver(el) {
         if (currentSubtitleEl === el && contentObserver) return;
 
-        // 清理旧观察者
         if (contentObserver) {
             contentObserver.disconnect();
             contentObserver = null;
@@ -273,9 +328,7 @@
         contentObserver.observe(el, {
             childList: true,
             characterData: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['style', 'class']
+            subtree: true
         });
     }
 
@@ -290,7 +343,6 @@
         const next = Math.max(10, current + delta);
         el.style.setProperty('font-size', next + 'px', 'important');
         localStorage.setItem('subtitleFontSize', next + 'px');
-        // 顺便刷新一下样式（防止刚改字号时状态不对）
         applySubtitleStyle(el);
     }
 
@@ -311,7 +363,6 @@
         }
     }, 600);
 
-    // 全局观察：布局切换、元素增减
     const observer = new MutationObserver((mutations) => {
         let needCheck = false;
         for (const m of mutations) {
